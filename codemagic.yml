@@ -1,0 +1,109 @@
+workflows:
+  amethyst-ios-build:
+    name: Amethyst改版測試
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: latest
+      vars:
+        PLATFORM: "2"
+        RELEASE: "1"
+        SLIMMED: "1"
+
+    scripts:
+      - name: 還原分包原始碼
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR"
+
+          rm -rf Source
+
+          found_archive=0
+          for archive in Source_Part*.zip; do
+            if [ -f "$archive" ]; then
+              found_archive=1
+              echo "正在解壓：$archive"
+              unzip -q -o "$archive" -d "$CM_BUILD_DIR"
+            fi
+          done
+
+          if [ "$found_archive" -ne 1 ]; then
+            echo "錯誤：找不到 Source_Part*.zip"
+            exit 1
+          fi
+
+          test -d "$CM_BUILD_DIR/Source/Amethyst.xcodeproj"
+          test -f "$CM_BUILD_DIR/Source/Makefile"
+
+          echo "原始碼還原完成"
+
+      - name: 安裝建置工具
+        script: |
+          set -euo pipefail
+
+          brew update
+          brew install make cmake wget ldid
+
+          if ! /usr/libexec/java_home -v 1.8 >/dev/null 2>&1; then
+            brew install --cask temurin@8
+          fi
+
+          echo "建置工具安裝完成"
+
+      - name: 準備 MobileGlues
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          rm -rf Natives/external/MobileGlues
+          mkdir -p Natives/external
+
+          git clone --depth 1             https://github.com/MobileGL-Dev/MobileGlues.git             Natives/external/MobileGlues
+
+          test -d Natives/external/MobileGlues/src/main/cpp
+          test -f Natives/external/MobileGlues/src/main/cpp/CMakeLists.txt
+
+          echo "MobileGlues 準備完成"
+
+      - name: 清理舊建置檔
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          rm -rf build
+          rm -rf JavaApp/build
+          rm -rf artifacts
+
+          echo "舊建置檔已清理"
+
+      - name: 建置 IPA
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export BOOTJDK="$(/usr/libexec/java_home -v 1.8)/bin"
+
+          echo "BOOTJDK=$BOOTJDK"
+          echo "開始建置 Amethyst改版測試"
+
+          gmake -j1 dsym package             PLATFORM="$PLATFORM"             RELEASE="$RELEASE"             SLIMMED="$SLIMMED"             JOBS=1             RUNNER=1
+
+      - name: 檢查建置產物
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          echo "搜尋 IPA / TIPA："
+          find artifacts -maxdepth 2 -type f \( -name "*.ipa" -o -name "*.tipa" \) -print
+
+          if ! find artifacts -maxdepth 2 -type f \( -name "*.ipa" -o -name "*.tipa" \) | grep -q .; then
+            echo "錯誤：沒有找到 IPA 或 TIPA"
+            exit 1
+          fi
+
+    artifacts:
+      - Source/artifacts/*.ipa
+      - Source/artifacts/*.tipa
+      - Source/artifacts/*.dSYM
