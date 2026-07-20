@@ -1,0 +1,189 @@
+workflows:
+  amethyst-ios-build:
+    name: Amethyst改版測試
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+
+    environment:
+      xcode: latest
+      vars:
+        PLATFORM: "2"
+        RELEASE: "1"
+        SLIMMED: "1"
+
+    scripts:
+      - name: 還原分包原始碼
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR"
+
+          rm -rf Source
+
+          found_archive=0
+          for archive in Source_Part*.zip; do
+            if [ -f "$archive" ]; then
+              found_archive=1
+              echo "正在解壓：$archive"
+              unzip -q -o "$archive" -d "$CM_BUILD_DIR"
+            fi
+          done
+
+          if [ "$found_archive" -ne 1 ]; then
+            echo "錯誤：找不到 Source_Part*.zip"
+            exit 1
+          fi
+
+          test -d "$CM_BUILD_DIR/Source/Amethyst.xcodeproj"
+          test -f "$CM_BUILD_DIR/Source/Makefile"
+
+      - name: 安裝建置工具
+        script: |
+          set -euo pipefail
+          brew update
+          brew install make cmake wget ldid
+
+          if ! /usr/libexec/java_home -v 1.8 >/dev/null 2>&1; then
+            brew install --cask temurin@8
+          fi
+
+      - name: 還原其餘 Git 子模組
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          if [ ! -f .gitmodules ]; then
+            echo "錯誤：Source/.gitmodules 不存在"
+            exit 1
+          fi
+
+          git config -f .gitmodules --get-regexp '^submodule\..*\.path$' |
+          while read -r key path; do
+            name="${key#submodule.}"
+            name="${name%.path}"
+            url="$(git config -f .gitmodules --get "submodule.${name}.url")"
+
+            if [ "$path" = "Natives/external/MobileGlues" ]; then
+              continue
+            fi
+
+            echo "準備子模組：$path"
+            rm -rf "$path"
+            mkdir -p "$(dirname "$path")"
+
+            case "$url" in
+              ../*)
+                url="https://github.com/AngelAuraMC/${url#../}"
+                ;;
+              ./*)
+                url="https://github.com/AngelAuraMC/${url#./}"
+                ;;
+            esac
+
+            git clone --depth 1 --recursive "$url" "$path"
+          done
+
+          test -f Natives/external/AFNetworking/AFNetworking/AFSecurityPolicy.m
+          test -f Natives/external/fishhook/fishhook.c
+
+          echo "其餘 Git 子模組準備完成"
+
+      - name: 準備 MobileGlues
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          rm -rf Natives/external/MobileGlues
+          mkdir -p Natives/external
+
+          git clone --depth 1 --recursive             https://github.com/MobileGL-Dev/MobileGlues.git             Natives/external/MobileGlues
+
+          cd Natives/external/MobileGlues
+
+          if [ -f "src/main/cpp/CMakeLists.txt" ]; then
+            echo "使用舊版 MobileGlues 目錄結構"
+          elif [ -f "MobileGlues-cpp/CMakeLists.txt" ]; then
+            echo "偵測到新版 MobileGlues 目錄結構，建立相容路徑"
+            mkdir -p src/main
+            rm -rf src/main/cpp
+            ln -s "$PWD/MobileGlues-cpp" src/main/cpp
+          else
+            echo "錯誤：找不到 MobileGlues 的 CMakeLists.txt"
+            find . -maxdepth 4 -name CMakeLists.txt -print
+            exit 1
+          fi
+
+          echo "相容路徑："
+          ls -la src/main
+          test -f src/main/cpp/CMakeLists.txt
+
+          echo "MobileGlues 準備完成"
+
+      - name: 修正新版 MobileGlues 建置規則
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          makefile = Path("Makefile")
+          text = makefile.read_text(encoding="utf-8")
+
+          cmake_anchor = '-DMACOS="1" \\\n'
+          cmake_insert = '-DMACOS="1" \\\n -DSPIRV_CROSS_SHARED=ON \\\n'
+
+          old_build = "cmake --build $(WORKINGDIR)/mobileglues --config RelWithDebInfo -j$(JOBS) --target mobileglues"
+          new_build = "cmake --build $(WORKINGDIR)/mobileglues --config RelWithDebInfo -j$(JOBS) --target mobileglues spirv-cross-c-shared"
+
+          old_copy = "cp $(SOURCEDIR)/Natives/external/MobileGlues/src/main/cpp/libraries/ios/libspirv-cross-c-shared.0.dylib $(WORKINGDIR)/libspirv-cross-c-shared.0.dylib"
+          new_copy = "find $(WORKINGDIR)/mobileglues -type f -name 'libspirv-cross-c-shared*.dylib' -print -quit | xargs -I{} cp '{}' $(WORKINGDIR)/libspirv-cross-c-shared.0.dylib"
+
+          if cmake_anchor not in text:
+              raise SystemExit("找不到 MobileGlues CMake 設定位置")
+          if old_build not in text:
+              raise SystemExit("找不到 MobileGlues build 規則")
+          if old_copy not in text:
+              raise SystemExit("找不到舊版 SPIRV-Cross 複製規則")
+
+          text = text.replace(cmake_anchor, cmake_insert, 1)
+          text = text.replace(old_build, new_build, 1)
+          text = text.replace(old_copy, new_copy, 1)
+          makefile.write_text(text, encoding="utf-8")
+          PY
+
+          grep -n "SPIRV_CROSS_SHARED\|spirv-cross-c-shared" Makefile
+
+      - name: 清理舊建置檔
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+          rm -rf build
+          rm -rf JavaApp/build
+          rm -rf artifacts
+
+      - name: 建置 IPA
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export BOOTJDK="$(/usr/libexec/java_home -v 1.8)/bin"
+
+          gmake -j1 dsym package             PLATFORM="$PLATFORM"             RELEASE="$RELEASE"             SLIMMED="$SLIMMED"             JOBS=1             RUNNER=1
+
+      - name: 檢查建置產物
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/Source"
+
+          find artifacts -maxdepth 2 -type f \( -name "*.ipa" -o -name "*.tipa" \) -print
+
+          if ! find artifacts -maxdepth 2 -type f \( -name "*.ipa" -o -name "*.tipa" \) | grep -q .; then
+            echo "錯誤：沒有找到 IPA 或 TIPA"
+            exit 1
+          fi
+
+    artifacts:
+      - Source/artifacts/*.ipa
+      - Source/artifacts/*.tipa
+      - Source/artifacts/*.dSYM
