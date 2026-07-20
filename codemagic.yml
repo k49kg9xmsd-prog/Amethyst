@@ -1,0 +1,50 @@
+workflows:
+  amethyst-ios-build:
+    name: Amethyst改版測試
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+      vars:
+        PLATFORM: "2"
+        RELEASE: "1"
+        SLIMMED: "1"
+    scripts:
+      - name: 還原分包原始碼
+        script: |
+          set -e
+          cd "$CM_BUILD_DIR"
+          rm -rf Source
+          for archive in Source_Part*.zip; do
+            echo "正在解壓：$archive"
+            unzip -q -o "$archive" -d "$CM_BUILD_DIR"
+          done
+          test -d "$CM_BUILD_DIR/Source/Amethyst.xcodeproj"
+          test -f "$CM_BUILD_DIR/Source/Makefile"
+      - name: 安裝建置工具
+        script: |
+          brew update
+          brew install make cmake wget ldid || true
+          if ! /usr/libexec/java_home -v 1.8 >/dev/null 2>&1; then
+            brew install --cask temurin@8
+          fi
+      - name: 準備原始碼
+        script: |
+          cd "$CM_BUILD_DIR/Source"
+          git submodule update --init --recursive || true
+      - name: 建置 IPA
+        script: |
+          cd "$CM_BUILD_DIR/Source"
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+          export BOOTJDK="$(/usr/libexec/java_home -v 1.8)/bin"
+          gmake -j"$(sysctl -n hw.ncpu)" dsym package \
+            PLATFORM="$PLATFORM" RELEASE="$RELEASE" SLIMMED="$SLIMMED" RUNNER=1
+    artifacts:
+      - Source/artifacts/*.ipa
+      - Source/artifacts/*.tipa
+      - Source/artifacts/*.dSYM
+    publishing:
+      email:
+        notify:
+          success: true
+          failure: true
