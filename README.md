@@ -1,30 +1,25 @@
-# Filza Minizip Codemagic 專案
+# Nekza Codemagic 專案
 
-## GitHub 根目錄結構
-
-請保持根目錄只有以下兩個檔案和一個資料夾：
+GitHub 根目錄請保持只有：
 
 ```text
-codemagic.yaml
 README.md
+codemagic.yaml
 FilzaMinizip/
 ```
 
-輸入 IPA 必須放在：
+目前版本會：
+
+- 保留 DarkSword 的 `/var` 存取能力。
+- 內嵌 Minizip Shim，修復已實測成功的 ZIP 建立功能。
+- 同時匯出 unzip 相關函式，供原本的解壓 Hook 使用。
+- 將應用名稱改為 `Nekza`。
+- 將主程式與擴充套件圖示換成專案內的 `NekzaIcon.jpg`。
+
+Codemagic 成功後下載：
 
 ```text
-FilzaMinizip/input/FilzaJailed.ipa
+FilzaMinizip/build/Nekza.ipa
 ```
 
-上傳到 GitHub 後，在 Codemagic 選擇工作流程：
-
-```text
-Build Filza Minizip Hook
-```
-
-成功後產物為：
-
-```text
-FilzaMinizip/build/FilzaJailed_MinzipHook.ipa
-FilzaMinizip/build/FilzaMinizipShim.dylib
-```
+再使用輕鬆簽簽署全部動態庫後安裝。
