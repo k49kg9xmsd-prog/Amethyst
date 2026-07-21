@@ -1,0 +1,105 @@
+workflows:
+  patch-filza-minizip:
+    name: Build Filza Minizip Hook
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+
+    environment:
+      xcode: 16.4
+      vars:
+        MIN_IOS: "15.0"
+
+    scripts:
+      - name: 顯示專案結構
+        script: |
+          set -e
+          echo "目前目錄："
+          pwd
+          echo "專案檔案："
+          find . -maxdepth 4 -type f | sort
+
+      - name: 檢查輸入 IPA
+        script: |
+          set -e
+          INPUT_IPA="FilzaMinizip/input/FilzaJailed.ipa"
+
+          if [ ! -f "$INPUT_IPA" ]; then
+            echo "找不到輸入 IPA：$INPUT_IPA"
+            echo "請確認檔案位於：FilzaMinizip/input/FilzaJailed.ipa"
+            exit 1
+          fi
+
+          echo "已找到 IPA："
+          ls -lh "$INPUT_IPA"
+
+      - name: 編譯 Minizip Shim
+        script: |
+          set -e
+          bash FilzaMinizip/scripts/build_shim.sh
+
+      - name: 編譯 Mach-O 注入工具（main.c 修正版）
+        script: |
+          set -e
+          bash FilzaMinizip/scripts/build_insert_dylib.sh
+
+      - name: 修改 IPA
+        script: |
+          set -e
+          bash FilzaMinizip/scripts/patch_ipa.sh
+
+      - name: 檢查輸出結果
+        script: |
+          set -e
+
+          OUTPUT_IPA="FilzaMinizip/build/FilzaJailed_MinzipHook.ipa"
+          INSPECT_DIR="FilzaMinizip/build/inspect"
+
+          test -f "$OUTPUT_IPA" || {
+            echo "沒有生成輸出 IPA：$OUTPUT_IPA"
+            exit 1
+          }
+
+          rm -rf "$INSPECT_DIR"
+          mkdir -p "$INSPECT_DIR"
+          unzip -q "$OUTPUT_IPA" -d "$INSPECT_DIR"
+
+          APP=$(find "$INSPECT_DIR/Payload" \
+            -maxdepth 1 \
+            -type d \
+            -name '*.app' \
+            | head -n 1)
+
+          if [ -z "$APP" ]; then
+            echo "輸出 IPA 裡找不到 .app"
+            exit 1
+          fi
+
+          EXE=$(/usr/libexec/PlistBuddy \
+            -c "Print :CFBundleExecutable" \
+            "$APP/Info.plist")
+
+          echo "App：$APP"
+          echo "Executable：$EXE"
+
+          test -f "$APP/$EXE" || {
+            echo "找不到主程式：$APP/$EXE"
+            exit 1
+          }
+
+          test -f "$APP/Frameworks/FilzaMinizipShim.dylib" || {
+            echo "找不到 FilzaMinizipShim.dylib"
+            exit 1
+          }
+
+          echo "檢查主程式載入命令："
+          otool -L "$APP/$EXE" | grep FilzaMinizipShim
+
+          echo "檢查 Minizip 匯出符號："
+          nm -gU "$APP/Frameworks/FilzaMinizipShim.dylib" \
+            | grep -E '_(zipOpen64|zipWriteInFileInZip|zipClose|unzOpen64)$'
+
+          echo "建置與檢查完成。"
+
+    artifacts:
+      - FilzaMinizip/build/FilzaJailed_MinzipHook.ipa
+      - FilzaMinizip/build/FilzaMinizipShim.dylib
