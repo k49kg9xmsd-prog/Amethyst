@@ -1,34 +1,29 @@
 workflows:
-  patch-filza-minizip:
-    name: Build Filza Minizip Hook
+  filza-minizip-build:
+    name: Filza Minizip Build
     instance_type: mac_mini_m2
-    max_build_duration: 30
+    max_build_duration: 60
+
     environment:
-      xcode: 16.4
-      vars:
-        MIN_IOS: "15.0"
+      xcode: latest
+
     scripts:
-      - name: Verify input IPA
+      - name: Check repository files
         script: |
-          set -e
-          test -f FilzaMinizip/input/FilzaJailed.ipa || {
-            echo "Please add your DarkSword Filza IPA as FilzaMinizip/input/FilzaJailed.ipa"
-            exit 1
-          }
-      - name: Build minizip shim
-        script: ./FilzaMinizip/scripts/build_shim.sh
-      - name: Build Mach-O injector
-        script: ./FilzaMinizip/scripts/build_insert_dylib.sh
-      - name: Patch IPA
-        script: ./FilzaMinizip/scripts/patch_ipa.sh
-      - name: Inspect result
+          pwd
+          find . -maxdepth 3 -type f -print
+
+      - name: Check project directory
         script: |
-          set -e
-          unzip -q FilzaMinizip/build/FilzaJailed_MinzipHook.ipa -d FilzaMinizip/build/inspect
-          APP=$(find FilzaMinizip/build/inspect/Payload -maxdepth 1 -name '*.app' -type d | head -1)
-          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
-          otool -L "$APP/$EXE" | grep FilzaMinizipShim
-          nm -gU "$APP/Frameworks/FilzaMinizipShim.dylib" | grep _zipOpen64
+          test -d FilzaMinizip
+          ls -la FilzaMinizip
+
+      - name: Run build script
+        script: |
+          chmod +x FilzaMinizip/build.sh
+          ./FilzaMinizip/build.sh
+
     artifacts:
-      - FilzaMinizip/build/FilzaJailed_MinzipHook.ipa
-      - FilzaMinizip/build/FilzaMinizipShim.dylib
+      - FilzaMinizip/output/*.ipa
+      - FilzaMinizip/output/*.dylib
+      - FilzaMinizip/output/*.zip
